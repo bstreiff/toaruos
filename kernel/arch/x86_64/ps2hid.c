@@ -295,9 +295,9 @@ static int shared_handler(struct regs * r) {
  * @brief IRQ1 handler.
  */
 static int keyboard_handler(struct regs *r) {
-	uint8_t data_byte = inportb(PS2_DATA);
 	irq_ack(KEYBOARD_IRQ);
-	ps2_kbd_handle(data_byte);
+	ps2_kbd_handle(inportb(PS2_DATA));
+
 	return 1;
 }
 
@@ -305,9 +305,9 @@ static int keyboard_handler(struct regs *r) {
  * @brief IRQ12 handler.
  */
 static int mouse_handler(struct regs *r) {
-	uint8_t data_byte = inportb(PS2_DATA);
 	irq_ack(MOUSE_IRQ);
-	ps2_mouse_handle(data_byte);
+	ps2_mouse_handle(inportb(PS2_DATA));
+
 	return 1;
 }
 
