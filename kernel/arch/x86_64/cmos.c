@@ -200,27 +200,7 @@ size_t arch_cpu_mhz(void) {
 	return tsc_mhz;
 }
 
-/**
- * @brief Initializes boot time, system time, TSC rate, etc.
- *
- * We determine TSC rate with a one-shot PIT, which seems
- * to work fine... the PIT is the only thing with both reasonable
- * precision and actual known wall-clock configuration.
- *
- * In Bochs, this has a tendency to be 1) completely wrong (usually
- * about half the time that actual execution will run at, in my
- * experiences) and 2) loud, as despite the attempt to turn off
- * the speaker it still seems to beep it (the second channel of the
- * PIT controls the beeper).
- *
- * In QEMU, VirtualBox, VMware, and on all real hardware I've tested,
- * including everything from a ThinkPad T410 to a Surface Pro 6, this
- * has been surprisingly accurate and good enough to use the TSC as
- * our only wall clock source.
- */
-void arch_clock_initialize(void) {
-	dprintf("tsc: Calibrating system timestamp counter.\n");
-	arch_boot_time = read_cmos();
+static void calibrate_tsc_frequency(void) {
 	uintptr_t end_lo, end_hi;
 	uint32_t start_lo, start_hi;
 	asm volatile (
@@ -277,6 +257,31 @@ void arch_clock_initialize(void) {
 	tsc_mhz = (end - start) / 10000;
 	if (tsc_mhz == 0) tsc_mhz = 2000; /* uh oh */
 	tsc_basis_time = start / tsc_mhz;
+}
+
+/**
+ * @brief Initializes boot time, system time, TSC rate, etc.
+ *
+ * We determine TSC rate with a one-shot PIT, which seems
+ * to work fine... the PIT is the only thing with both reasonable
+ * precision and actual known wall-clock configuration.
+ *
+ * In Bochs, this has a tendency to be 1) completely wrong (usually
+ * about half the time that actual execution will run at, in my
+ * experiences) and 2) loud, as despite the attempt to turn off
+ * the speaker it still seems to beep it (the second channel of the
+ * PIT controls the beeper).
+ *
+ * In QEMU, VirtualBox, VMware, and on all real hardware I've tested,
+ * including everything from a ThinkPad T410 to a Surface Pro 6, this
+ * has been surprisingly accurate and good enough to use the TSC as
+ * our only wall clock source.
+ */
+void arch_clock_initialize(void) {
+	dprintf("tsc: Calibrating system timestamp counter.\n");
+	arch_boot_time = read_cmos();
+
+	calibrate_tsc_frequency();
 
 	dprintf("tsc: TSC timed at %lu MHz..\n", tsc_mhz);
 	dprintf("tsc: Boot time is %lus.\n", arch_boot_time);
