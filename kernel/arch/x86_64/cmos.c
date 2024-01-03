@@ -19,6 +19,7 @@
 #include <kernel/process.h>
 #include <kernel/arch/x86_64/ports.h>
 #include <kernel/arch/x86_64/irq.h>
+#include <kernel/hyperv-tlfs.h>
 #include <sys/time.h>
 
 uint64_t arch_boot_time = 0; /**< Time (in seconds) according to the CMOS right before we examine the TSC */
@@ -200,9 +201,54 @@ size_t arch_cpu_mhz(void) {
 	return tsc_mhz;
 }
 
+#define cpuid(in,a,b,c,d) do { asm volatile ("cpuid" : "=a"(a),"=b"(b),"=c"(c),"=d"(d) : "a"(in)); } while(0)
+
+static int can_get_tsc_frequency_from_hyperv(void) {
+	unsigned long eax, ebx, ecx, edx;
+
+	/* If we are running in a hypervisor, CPUID.01h.ECX:31 is set */
+	cpuid(0x01, eax, ebx, ecx, edx);
+	if (!(ecx & 0x80000000))
+		return 0;
+
+	/* Is that hypervisor Hyper-V? */
+	cpuid(CPUID_LEAF_HYPERVISOR, eax, ebx, ecx, edx);
+	if (!(ebx == CPUID_HYPERVISOR_HV_EBX &&
+	      ecx == CPUID_HYPERVISOR_HV_ECX &&
+	      edx == CPUID_HYPERVISOR_HV_EDX))
+		return 0;
+
+	/* Does that hypervisor implement the Hv#1 interface? */
+	cpuid(CPUID_LEAF_HV_INTERFACE, eax, ebx, ecx, edx);
+	if (eax != CPUID_HV_INTERFACE_V1)
+		return 0;
+
+	/* Does the interface support getting TSC frequency? */
+	cpuid(CPUID_LEAF_HV_FEATURES, eax, ebx, ecx, edx);
+	if (!(edx & HV_FEATURE_FREQUENCY_MSRS_AVAILABLE))
+		return 0;
+
+	return 1;
+}
+
+static void get_tsc_frequency_from_hyperv(void) {
+	uint32_t lo, hi;
+	uint64_t hyperv_tsc_frequency;
+
+	asm volatile ( "rdmsr" : "=a" (lo), "=d" (hi): "c" (HV_X64_MSR_TSC_FREQUENCY) );
+
+	hyperv_tsc_frequency = (hi << 32) | lo;
+
+	dprintf("tsc: hyperv: TSC frequency is %lu Hz\n", hyperv_tsc_frequency);
+
+	tsc_mhz = hyperv_tsc_frequency / 1000000;
+	tsc_basis_time = read_tsc() / tsc_mhz;
+}
+
 static void calibrate_tsc_frequency(void) {
 	uintptr_t end_lo, end_hi;
 	uint32_t start_lo, start_hi;
+
 	asm volatile (
 		/* Disables and sets gating for channel 2 */
 		"inb   $0x61, %%al\n"
@@ -276,12 +322,23 @@ static void calibrate_tsc_frequency(void) {
  * including everything from a ThinkPad T410 to a Surface Pro 6, this
  * has been surprisingly accurate and good enough to use the TSC as
  * our only wall clock source.
+ *
+ * In Hyper-V the PIT is unavailable on Gen 2 VMs; on Gen 1 VMs channel
+ * 2 doesn't seem to be implemented completely (the timer counts down,
+ * but bit 5 in 0x61 stays high). Hyper-V does implement an interface
+ * to passthrough the TSC frequency, so just get it from there if it's
+ * available.
  */
 void arch_clock_initialize(void) {
 	dprintf("tsc: Calibrating system timestamp counter.\n");
+
 	arch_boot_time = read_cmos();
 
-	calibrate_tsc_frequency();
+	if (can_get_tsc_frequency_from_hyperv()) {
+		get_tsc_frequency_from_hyperv();
+	} else {
+		calibrate_tsc_frequency();
+	}
 
 	dprintf("tsc: TSC timed at %lu MHz..\n", tsc_mhz);
 	dprintf("tsc: Boot time is %lus.\n", arch_boot_time);
